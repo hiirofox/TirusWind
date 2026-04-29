@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.16)
 
 project(TirusWind LANGUAGES C CXX)
 
@@ -13,6 +13,17 @@ set(DSP56300_DEBUGGER OFF CACHE BOOL "" FORCE)
 
 set(GEARMULATOR_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/gearmulator/source")
 set(DSP56300_SOURCE_DIR "${GEARMULATOR_SOURCE_DIR}/dsp56300/source")
+
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+	add_compile_options(
+		$<$<CONFIG:Release>:-Ofast>
+		$<$<CONFIG:Release>:-mcpu=cortex-a55>
+		$<$<CONFIG:Release>:-mtune=cortex-a55>
+		$<$<CONFIG:Release>:-fno-math-errno>
+		$<$<CONFIG:Release>:-fno-trapping-math>
+		$<$<CONFIG:Release>:-DNDEBUG>
+	)
+endif()
 
 add_subdirectory("${DSP56300_SOURCE_DIR}/asmjit" "${CMAKE_BINARY_DIR}/gearmulator/asmjit" EXCLUDE_FROM_ALL)
 
@@ -37,3 +48,7 @@ target_compile_definitions(tirus_minimal PRIVATE
 )
 
 target_link_libraries(tirus_minimal PRIVATE virusLib)
+
+if(UNIX AND NOT APPLE)
+	target_link_libraries(tirus_minimal PRIVATE asound)
+endif()

@@ -6,23 +6,45 @@
 #include "virusLib/microcontroller.h"
 #include "virusLib/romfile.h"
 
+#include "MidiIOHost.h"
+#include "WaveIOI2S.h"
+
 #include <algorithm>
 #include <array>
-#include <cmath>
+#include <atomic>
+#include <csignal>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace
 {
-	constexpr uint32_t kSampleRate = 44100;
-	constexpr uint32_t kBlockSize = 64;
-	constexpr uint32_t kRenderSeconds = 5;
-	constexpr uint32_t kWarmupFrames = kSampleRate / 4;
+	constexpr uint32_t kSampleRate = 22050;
+	constexpr uint32_t kFallbackBlockSize = 256;
+	constexpr uint32_t kWarmupFrames = kSampleRate / 2;
+	constexpr int kDefaultPresetBank = 0;
+	constexpr int kDefaultPresetProgram = 10;
+
+	std::atomic_bool g_shouldRun{true};
+
+	void handleSignal(int)
+	{
+		g_shouldRun.store(false);
+	}
+
+	std::filesystem::path projectRoot()
+	{
+#ifdef TIRUSWIND_PROJECT_ROOT
+		return TIRUSWIND_PROJECT_ROOT;
+#else
+		return std::filesystem::current_path();
+#endif
+	}
 
 	std::vector<uint8_t> readBinaryFile(const std::filesystem::path& path)
 	{
@@ -44,57 +66,80 @@ namespace
 		return data;
 	}
 
-	void writeLE16(std::ofstream& file, const uint16_t value)
+	uint32_t clampMidi7(const int value)
 	{
-		file.put(static_cast<char>(value & 0xff));
-		file.put(static_cast<char>((value >> 8) & 0xff));
+		return static_cast<uint32_t>(std::clamp(value, 0, 127));
 	}
 
-	void writeLE32(std::ofstream& file, const uint32_t value)
+	bool alsaEventToSynthEvent(const snd_seq_event_t& ev, synthLib::SMidiEvent& out)
 	{
-		file.put(static_cast<char>(value & 0xff));
-		file.put(static_cast<char>((value >> 8) & 0xff));
-		file.put(static_cast<char>((value >> 16) & 0xff));
-		file.put(static_cast<char>((value >> 24) & 0xff));
+		using namespace synthLib;
+
+		out = SMidiEvent(MidiEventSource::Host);
+
+		switch(ev.type)
+		{
+		case SND_SEQ_EVENT_NOTE:
+		case SND_SEQ_EVENT_NOTEON:
+			out.a = static_cast<uint8_t>((ev.data.note.velocity == 0 ? M_NOTEOFF : M_NOTEON) | (ev.data.note.channel & 0x0f));
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data.note.note));
+			out.c = static_cast<uint8_t>(clampMidi7(ev.data.note.velocity));
+			return true;
+
+		case SND_SEQ_EVENT_NOTEOFF:
+			out.a = static_cast<uint8_t>(M_NOTEOFF | (ev.data.note.channel & 0x0f));
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data.note.note));
+			out.c = static_cast<uint8_t>(clampMidi7(ev.data.note.velocity));
+			return true;
+
+		case SND_SEQ_EVENT_KEYPRESS:
+			out.a = static_cast<uint8_t>(M_POLYPRESSURE | (ev.data.note.channel & 0x0f));
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data.note.note));
+			out.c = static_cast<uint8_t>(clampMidi7(ev.data.note.velocity));
+			return true;
+
+		case SND_SEQ_EVENT_CONTROLLER:
+			out.a = static_cast<uint8_t>(M_CONTROLCHANGE | (ev.data.control.channel & 0x0f));
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data.control.param));
+			out.c = static_cast<uint8_t>(clampMidi7(ev.data.control.value));
+			return true;
+
+		case SND_SEQ_EVENT_PGMCHANGE:
+			out.a = static_cast<uint8_t>(M_PROGRAMCHANGE | (ev.data.control.channel & 0x0f));
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data.control.value));
+			out.c = 0;
+			return true;
+
+		case SND_SEQ_EVENT_CHANPRESS:
+			out.a = static_cast<uint8_t>(M_AFTERTOUCH | (ev.data.control.channel & 0x0f));
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data.control.value));
+			out.c = 0;
+			return true;
+
+		case SND_SEQ_EVENT_PITCHBEND:
+			{
+				const int bend = std::clamp(ev.data.control.value + 8192, 0, 16383);
+				out.a = static_cast<uint8_t>(M_PITCHBEND | (ev.data.control.channel & 0x0f));
+				out.b = static_cast<uint8_t>(bend & 0x7f);
+				out.c = static_cast<uint8_t>((bend >> 7) & 0x7f);
+				return true;
+			}
+
+		default:
+			return false;
+		}
 	}
 
-	int16_t floatToPcm16(const float sample)
+	void resizeAudioBuffers(
+		std::array<std::vector<float>, 4>& inputs,
+		std::array<std::vector<float>, 12>& outputs,
+		const uint32_t frames)
 	{
-		const auto clipped = std::clamp(sample, -1.0f, 1.0f);
-		return static_cast<int16_t>(std::lrint(clipped * 32767.0f));
-	}
+		for(auto& input : inputs)
+			input.assign(frames, 0.0f);
 
-	void writeStereoWav(const std::filesystem::path& path, const std::vector<float>& interleavedStereo)
-	{
-		if((interleavedStereo.size() & 1u) != 0)
-			throw std::runtime_error("Stereo buffer has an odd number of samples");
-
-		std::ofstream file(path, std::ios::binary);
-		if(!file)
-			throw std::runtime_error("Failed to create " + path.string());
-
-		const uint16_t channels = 2;
-		const uint16_t bitsPerSample = 16;
-		const uint16_t blockAlign = channels * bitsPerSample / 8;
-		const uint32_t byteRate = kSampleRate * blockAlign;
-		const uint32_t dataBytes = static_cast<uint32_t>(interleavedStereo.size() * sizeof(int16_t));
-
-		file.write("RIFF", 4);
-		writeLE32(file, 36 + dataBytes);
-		file.write("WAVE", 4);
-		file.write("fmt ", 4);
-		writeLE32(file, 16);
-		writeLE16(file, 1);
-		writeLE16(file, channels);
-		writeLE32(file, kSampleRate);
-		writeLE32(file, byteRate);
-		writeLE16(file, blockAlign);
-		writeLE16(file, bitsPerSample);
-		file.write("data", 4);
-		writeLE32(file, dataBytes);
-
-		for(const auto sample : interleavedStereo)
-			writeLE16(file, static_cast<uint16_t>(floatToPcm16(sample)));
+		for(auto& output : outputs)
+			output.assign(frames, 0.0f);
 	}
 
 	void clearAudioBuffers(std::array<std::vector<float>, 12>& outputs, const uint32_t frames)
@@ -108,8 +153,7 @@ namespace
 		std::array<std::vector<float>, 4>& inputs,
 		std::array<std::vector<float>, 12>& outputs,
 		const uint32_t frames,
-		const std::vector<synthLib::SMidiEvent>& midiIn,
-		std::vector<float>* recordedStereo)
+		const std::vector<synthLib::SMidiEvent>& midiIn)
 	{
 		synthLib::TAudioInputs inputPtrs{};
 		synthLib::TAudioOutputs outputPtrs{};
@@ -124,32 +168,23 @@ namespace
 
 		std::vector<synthLib::SMidiEvent> midiOut;
 		device.process(inputPtrs, outputPtrs, frames, midiIn, midiOut);
-
-		if(!recordedStereo)
-			return;
-
-		recordedStereo->reserve(recordedStereo->size() + frames * 2);
-		for(uint32_t i = 0; i < frames; ++i)
-		{
-			recordedStereo->push_back(outputs[0][i]);
-			recordedStereo->push_back(outputs[1][i]);
-		}
 	}
 
-	void processFrames(
+	void processSilentWarmup(
 		virusLib::Device& device,
 		std::array<std::vector<float>, 4>& inputs,
 		std::array<std::vector<float>, 12>& outputs,
 		uint32_t frames,
-		std::vector<synthLib::SMidiEvent> firstBlockMidi,
-		std::vector<float>* recordedStereo)
+		std::vector<synthLib::SMidiEvent> firstBlockMidi)
 	{
+		const auto blockFrames = static_cast<uint32_t>(outputs[0].size());
+
 		while(frames > 0)
 		{
-			const auto blockFrames = std::min(frames, kBlockSize);
-			processBlock(device, inputs, outputs, blockFrames, firstBlockMidi, recordedStereo);
+			const auto framesNow = std::min(frames, blockFrames);
+			processBlock(device, inputs, outputs, framesNow, firstBlockMidi);
 			firstBlockMidi.clear();
-			frames -= blockFrames;
+			frames -= framesNow;
 		}
 	}
 }
@@ -158,19 +193,19 @@ int main()
 {
 	try
 	{
-		const std::filesystem::path projectRoot = TIRUSWIND_PROJECT_ROOT;
-		const auto firmwarePath = projectRoot / "firmware" / "firmware.bin";
-		const auto wavPath = projectRoot / "test.wav";
+		std::signal(SIGINT, handleSignal);
+		std::signal(SIGTERM, handleSignal);
 
+		const auto firmwarePath = projectRoot() / "firmware" / "firmware.bin";
 		auto firmwareData = readBinaryFile(firmwarePath);
 
-		virusLib::ROMFile rom(firmwareData, firmwarePath.string(), virusLib::DeviceModel::TI2);
+		virusLib::ROMFile rom(firmwareData, firmwarePath.string(), virusLib::DeviceModel::Snow);
 		if(!rom.isValid())
 			throw std::runtime_error("Firmware is not a valid Virus TI2 firmware: " + firmwarePath.string());
 
 		virusLib::ROMFile::TPreset preset{};
-		if(!rom.getSingle(0, 10, preset))
-			throw std::runtime_error("Failed to read preset bank 0, program 0 from firmware");
+		if(!rom.getSingle(kDefaultPresetBank, kDefaultPresetProgram, preset))
+			throw std::runtime_error("Failed to read default preset from firmware");
 
 		std::cout << "Loaded firmware: " << firmwarePath << '\n';
 		std::cout << "Selected preset: " << virusLib::ROMFile::getSingleName(preset) << '\n';
@@ -178,20 +213,27 @@ int main()
 		synthLib::DeviceCreateParams params;
 		params.romName = firmwarePath.string();
 		params.romData = std::move(firmwareData);
-		params.customData = static_cast<uint32_t>(virusLib::DeviceModel::TI2);
+		params.customData = static_cast<uint32_t>(virusLib::DeviceModel::Snow);
 		params.hostSamplerate = static_cast<float>(kSampleRate);
 		params.preferredSamplerate = static_cast<float>(kSampleRate);
 
 		virusLib::Device device(params, false);
+    device.setDspClockPercent(22);//
 		if(!device.isValid())
 			throw std::runtime_error("Failed to create Virus TI2 device");
 
+		MidiIO_Universal midi;
+		if(midi.Start("TirusWind") != 0)
+			throw std::runtime_error("Failed to start MIDI IO");
+
+		WaveIO_I2S wave(kSampleRate);
+		auto blockSize = static_cast<uint32_t>(wave.GetPeriodSizeInFrames());
+		if(blockSize == 0)
+			blockSize = kFallbackBlockSize;
+
 		std::array<std::vector<float>, 4> inputs;
 		std::array<std::vector<float>, 12> outputs;
-		for(auto& input : inputs)
-			input.assign(kBlockSize, 0.0f);
-		for(auto& output : outputs)
-			output.assign(kBlockSize, 0.0f);
+		resizeAudioBuffers(inputs, outputs, blockSize);
 
 		std::vector<synthLib::SMidiEvent> presetMidi;
 		auto& presetEvent = presetMidi.emplace_back(synthLib::MidiEventSource::Host);
@@ -201,19 +243,31 @@ int main()
 			virusLib::SINGLE,
 			preset);
 
-		processFrames(device, inputs, outputs, kWarmupFrames, presetMidi, nullptr);
+		processSilentWarmup(device, inputs, outputs, kWarmupFrames, presetMidi);
 
-		std::vector<synthLib::SMidiEvent> noteOn;
-		noteOn.emplace_back(synthLib::MidiEventSource::Host, 0x90, 60, 100, 0);
+		std::cout << "Running realtime engine at " << kSampleRate
+		          << " Hz, block size " << blockSize << " frames\n";
+		std::cout << "Press Ctrl+C to stop.\n";
 
-		std::vector<float> renderedStereo;
-		renderedStereo.reserve(kSampleRate * kRenderSeconds * 2);
+		while(g_shouldRun.load())
+		{
+			std::vector<synthLib::SMidiEvent> midiIn;
+			snd_seq_event_t alsaEvent{};
 
-		processFrames(device, inputs, outputs, kSampleRate * kRenderSeconds, noteOn, &renderedStereo);
+			while(midi.PopEvent(alsaEvent))
+			{
+				synthLib::SMidiEvent synthEvent;
+				if(alsaEventToSynthEvent(alsaEvent, synthEvent))
+					midiIn.emplace_back(std::move(synthEvent));
+			}
 
-		writeStereoWav(wavPath, renderedStereo);
+			processBlock(device, inputs, outputs, blockSize, midiIn);
 
-		std::cout << "Wrote " << wavPath << '\n';
+			if(wave.PlayAudio(outputs[0].data(), outputs[1].data(), static_cast<int>(blockSize)) < 0)
+				throw std::runtime_error("ALSA audio playback failed");
+		}
+
+		std::cout << "Stopped.\n";
 		return 0;
 	}
 	catch(const std::exception& e)
