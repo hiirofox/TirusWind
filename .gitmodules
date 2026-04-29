@@ -1,0 +1,4 @@
+[submodule "gearmulator"]
+	path = gearmulator
+	url = https://github.com/hiirofox/gearmulator.git
+	branch = main

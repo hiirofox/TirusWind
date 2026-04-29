@@ -1,0 +1,131 @@
+# OS metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Editor and IDE state
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.VC.db
+*.VC.VC.opendb
+*.opensdf
+*.sdf
+ipch/
+*.swp
+*.swo
+*~
+
+# Local assistant/tooling state
+.claude/
+.mcp.json
+_copilot.bat
+claude*.bat
+
+# CMake and test output
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+DartConfiguration.tcl
+Testing/
+cmake-build-*/
+
+# Root-level build/output directories
+/build/
+/out/
+/bin/
+/temp/
+/temp*/
+/target/
+/logs/
+
+# Imported gearmulator generated directories
+/gearmulator/build/
+/gearmulator/out/
+/gearmulator/bin/
+/gearmulator/temp/
+/gearmulator/temp*/
+/gearmulator/target/logs/
+
+# Native compiler and linker output
+*.o
+*.obj
+*.lo
+*.la
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.exp
+*.ilk
+*.idb
+*.pdb
+*.pch
+*.gch
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+*.dSYM/
+
+# Common build configuration directories
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+x64/
+Win32/
+ARM/
+ARM64/
+
+# Plugin bundles and packaged artifacts
+*.vst3/
+*.component/
+*.app/
+*.clap
+*.vst
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.tar.xz
+*.rar
+
+# Android/Gradle local output
+.gradle/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Xcode local state
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Runtime/cache files
+*.log
+*.tmp
+*.temp
+*.cache
+*.pid
+core
+core.*

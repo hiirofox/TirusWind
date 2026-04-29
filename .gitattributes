@@ -1,0 +1,92 @@
+* text=auto
+
+# Keep source and build metadata stable across Windows/Linux/macOS.
+*.c      text eol=lf
+*.cc     text eol=lf
+*.cpp    text eol=lf
+*.cxx    text eol=lf
+*.h      text eol=lf
+*.hh     text eol=lf
+*.hpp    text eol=lf
+*.hxx    text eol=lf
+*.inc    text eol=lf
+*.inl    text eol=lf
+*.m      text eol=lf
+*.mm     text eol=lf
+*.asm    text eol=lf
+*.S      text eol=lf
+
+*.cmake  text eol=lf
+CMakeLists.txt text eol=lf
+*.sh     text eol=lf
+*.py     text eol=lf
+*.lua    text eol=lf
+*.json   text eol=lf
+*.xml    text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.md     text eol=lf
+*.txt    text eol=lf
+*.rml    text eol=lf
+*.rcss   text eol=lf
+*.css    text eol=lf
+*.html   text eol=lf
+*.js     text eol=lf
+*.ts     text eol=lf
+
+.gitattributes text eol=lf
+.gitignore     text eol=lf
+.gitmodules    text eol=lf
+.clang-format  text eol=lf
+.editorconfig  text eol=lf
+
+# Windows command/project files are friendlier with CRLF.
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+*.sln    text eol=crlf
+*.vcproj text eol=crlf
+*.vcxproj text eol=crlf
+*.props  text eol=crlf
+*.targets text eol=crlf
+
+# Binary assets and generated packages.
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.ico    binary
+*.icns   binary
+*.psd    binary
+*.ttf    binary
+*.otf    binary
+*.woff   binary
+*.woff2  binary
+*.wav    binary
+*.aif    binary
+*.aiff   binary
+*.mid    binary
+*.midi   binary
+*.syx    binary
+*.rom    binary
+*.bin    binary
+*.zip    binary
+*.7z     binary
+*.gz     binary
+*.xz     binary
+*.bz2    binary
+*.rar    binary
+*.pdf    binary
+
+# Compiled libraries, executables, and plugin bundles.
+*.a      binary
+*.lib    binary
+*.so     binary
+*.dylib  binary
+*.dll    binary
+*.exe    binary
+*.pdb    binary
+*.clap   binary
+*.vst    binary
+*.vst3   binary
+*.component binary
