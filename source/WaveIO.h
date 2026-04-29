@@ -36,7 +36,7 @@ private:
 public:
 	explicit WaveIO_I2S(unsigned int sampleRate)
 	{
-		periodSizeFrames = std::max(128u, sampleRate / 50u);
+		periodSizeFrames = 1024;
 		buffers.resize(kBufferCount);
 		headers.resize(kBufferCount);
 

@@ -22,6 +22,14 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#include <conio.h>
+#else
+#include <sys/select.h>
+#include <termios.h>
+#include <unistd.h>
+#endif
+
 namespace
 {
 	constexpr uint32_t kSampleRate = 44100;
@@ -31,6 +39,105 @@ namespace
 	constexpr int kDefaultPresetProgram = 10;
 
 	std::atomic_bool g_shouldRun{true};
+
+	enum class KeyboardAction
+	{
+		None,
+		PreviousPreset,
+		NextPreset,
+	};
+
+	struct PresetSelection
+	{
+		int bank = kDefaultPresetBank;
+		int program = kDefaultPresetProgram;
+	};
+
+	class KeyboardInput
+	{
+	public:
+		KeyboardInput()
+		{
+#if !defined(_WIN32)
+			if(tcgetattr(STDIN_FILENO, &oldTermios) == 0)
+			{
+				auto raw = oldTermios;
+				raw.c_lflag &= static_cast<unsigned int>(~(ICANON | ECHO));
+				raw.c_cc[VMIN] = 0;
+				raw.c_cc[VTIME] = 0;
+				enabled = tcsetattr(STDIN_FILENO, TCSANOW, &raw) == 0;
+			}
+#endif
+		}
+
+		~KeyboardInput()
+		{
+#if !defined(_WIN32)
+			if(enabled)
+				tcsetattr(STDIN_FILENO, TCSANOW, &oldTermios);
+#endif
+		}
+
+		KeyboardAction poll()
+		{
+#if defined(_WIN32)
+			if(!_kbhit())
+				return KeyboardAction::None;
+
+			const int first = _getch();
+			if(first == 0 || first == 224)
+			{
+				const int second = _getch();
+				if(second == 72)
+					return KeyboardAction::PreviousPreset;
+				if(second == 80)
+					return KeyboardAction::NextPreset;
+			}
+			return KeyboardAction::None;
+#else
+			if(!enabled || !hasInput())
+				return KeyboardAction::None;
+
+			unsigned char first = 0;
+			if(read(STDIN_FILENO, &first, 1) != 1)
+				return KeyboardAction::None;
+
+			if(first != 0x1b || !hasInput())
+				return KeyboardAction::None;
+
+			unsigned char second = 0;
+			if(read(STDIN_FILENO, &second, 1) != 1 || second != '[' || !hasInput())
+				return KeyboardAction::None;
+
+			unsigned char third = 0;
+			if(read(STDIN_FILENO, &third, 1) != 1)
+				return KeyboardAction::None;
+
+			if(third == 'A')
+				return KeyboardAction::PreviousPreset;
+			if(third == 'B')
+				return KeyboardAction::NextPreset;
+
+			return KeyboardAction::None;
+#endif
+		}
+
+	private:
+#if !defined(_WIN32)
+		bool hasInput() const
+		{
+			fd_set set;
+			FD_ZERO(&set);
+			FD_SET(STDIN_FILENO, &set);
+
+			timeval timeout{};
+			return select(STDIN_FILENO + 1, &set, nullptr, nullptr, &timeout) > 0;
+		}
+
+		termios oldTermios{};
+		bool enabled = false;
+#endif
+	};
 
 	void handleSignal(int)
 	{
@@ -188,6 +295,50 @@ namespace
 			frames -= framesNow;
 		}
 	}
+
+	bool loadPreset(
+		const virusLib::ROMFile& rom,
+		const std::filesystem::path& firmwarePath,
+		const PresetSelection& selection,
+		virusLib::ROMFile::TPreset& preset,
+		std::vector<synthLib::SMidiEvent>& midiIn)
+	{
+		if(!rom.getSingle(selection.bank, selection.program, preset))
+			return false;
+
+		auto& presetEvent = midiIn.emplace_back(synthLib::MidiEventSource::Host);
+		presetEvent.sysex = virusLib::Microcontroller::createSingleDump(
+			rom,
+			virusLib::BankNumber::EditBuffer,
+			virusLib::SINGLE,
+			preset);
+
+		std::cout << "Preset ROM: " << firmwarePath.filename().string()
+			<< " bank " << selection.bank
+			<< " program " << selection.program
+			<< " (#" << (selection.bank * virusLib::ROMFile::getSinglesPerBank() + selection.program + 1) << ")"
+			<< " name: " << virusLib::ROMFile::getSingleName(preset) << '\n';
+
+		return true;
+	}
+
+	PresetSelection advancePreset(
+		PresetSelection selection,
+		const int direction,
+		const uint32_t bankCount)
+	{
+		const auto programsPerBank = static_cast<int>(virusLib::ROMFile::getSinglesPerBank());
+		const auto totalPresets = static_cast<int>(bankCount) * programsPerBank;
+		if(totalPresets <= 0)
+			return selection;
+
+		auto flatIndex = selection.bank * programsPerBank + selection.program;
+		flatIndex = (flatIndex + direction + totalPresets) % totalPresets;
+
+		selection.bank = flatIndex / programsPerBank;
+		selection.program = flatIndex % programsPerBank;
+		return selection;
+	}
 }
 
 int main()
@@ -200,26 +351,31 @@ int main()
 		const auto firmwarePath = projectRoot() / "firmware" / "firmware.bin";
 		auto firmwareData = readBinaryFile(firmwarePath);
 
-		virusLib::ROMFile rom(firmwareData, firmwarePath.string(), virusLib::DeviceModel::Snow);
+		virusLib::ROMFile rom(firmwareData, firmwarePath.string(), virusLib::DeviceModel::TI2);
 		if(!rom.isValid())
 			throw std::runtime_error("Firmware is not a valid Virus TI2 firmware: " + firmwarePath.string());
 
+		const auto singleBankCount = rom.getNumSingleBanks();
+		if(singleBankCount == 0)
+			throw std::runtime_error("Firmware contains no single preset banks");
+
+		PresetSelection presetSelection;
 		virusLib::ROMFile::TPreset preset{};
-		if(!rom.getSingle(kDefaultPresetBank, kDefaultPresetProgram, preset))
+		std::vector<synthLib::SMidiEvent> presetMidi;
+		if(!loadPreset(rom, firmwarePath, presetSelection, preset, presetMidi))
 			throw std::runtime_error("Failed to read default preset from firmware");
 
 		std::cout << "Loaded firmware: " << firmwarePath << '\n';
-		std::cout << "Selected preset: " << virusLib::ROMFile::getSingleName(preset) << '\n';
 
 		synthLib::DeviceCreateParams params;
 		params.romName = firmwarePath.string();
 		params.romData = std::move(firmwareData);
-		params.customData = static_cast<uint32_t>(virusLib::DeviceModel::Snow);
+		params.customData = static_cast<uint32_t>(virusLib::DeviceModel::TI2);
 		params.hostSamplerate = static_cast<float>(kSampleRate);
 		params.preferredSamplerate = static_cast<float>(kSampleRate);
 
 		virusLib::Device device(params, false);
-		device.setDspClockPercent(40);
+		device.setDspClockPercent(30);
 		if(!device.isValid())
 			throw std::runtime_error("Failed to create Virus TI2 device");
 
@@ -236,19 +392,13 @@ int main()
 		std::array<std::vector<float>, 12> outputs;
 		resizeAudioBuffers(inputs, outputs, blockSize);
 
-		std::vector<synthLib::SMidiEvent> presetMidi;
-		auto& presetEvent = presetMidi.emplace_back(synthLib::MidiEventSource::Host);
-		presetEvent.sysex = virusLib::Microcontroller::createSingleDump(
-			rom,
-			virusLib::BankNumber::EditBuffer,
-			virusLib::SINGLE,
-			preset);
-
 		processSilentWarmup(device, inputs, outputs, kWarmupFrames, presetMidi);
 
 		std::cout << "Running realtime engine at " << kSampleRate
 		          << " Hz, block size " << blockSize << " frames\n";
-		std::cout << "Press Ctrl+C to stop.\n";
+		std::cout << "Press Up/Down to switch presets. Press Ctrl+C to stop.\n";
+
+		KeyboardInput keyboard;
 
 		while(g_shouldRun.load())
 		{
@@ -260,6 +410,21 @@ int main()
 				synthLib::SMidiEvent synthEvent;
 				if(midiEventToSynthEvent(midiEvent, synthEvent))
 					midiIn.emplace_back(std::move(synthEvent));
+			}
+
+			const auto keyboardAction = keyboard.poll();
+			if(keyboardAction == KeyboardAction::PreviousPreset ||
+				keyboardAction == KeyboardAction::NextPreset)
+			{
+				const int direction = keyboardAction == KeyboardAction::NextPreset ? 1 : -1;
+				const auto nextSelection = advancePreset(presetSelection, direction, singleBankCount);
+				virusLib::ROMFile::TPreset nextPreset{};
+
+				if(loadPreset(rom, firmwarePath, nextSelection, nextPreset, midiIn))
+				{
+					presetSelection = nextSelection;
+					preset = nextPreset;
+				}
 			}
 
 			processBlock(device, inputs, outputs, blockSize, midiIn);
