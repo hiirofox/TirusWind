@@ -14,7 +14,7 @@ set(DSP56300_DEBUGGER OFF CACHE BOOL "" FORCE)
 set(GEARMULATOR_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/gearmulator/source")
 set(DSP56300_SOURCE_DIR "${GEARMULATOR_SOURCE_DIR}/dsp56300/source")
 
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+if((UNIX AND NOT APPLE) AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 	add_compile_options(
 		$<$<CONFIG:Release>:-Ofast>
 		$<$<CONFIG:Release>:-mcpu=cortex-a55>
@@ -41,6 +41,12 @@ add_subdirectory("${GEARMULATOR_SOURCE_DIR}/virusLib" "${CMAKE_BINARY_DIR}/gearm
 
 add_executable(tirus_minimal source/main.cpp)
 
+set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY VS_STARTUP_PROJECT tirus_minimal)
+
+set_target_properties(tirus_minimal PROPERTIES
+	VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" TIRUSWIND_PROJECT_ROOT)
 
 target_compile_definitions(tirus_minimal PRIVATE
@@ -48,6 +54,27 @@ target_compile_definitions(tirus_minimal PRIVATE
 )
 
 target_link_libraries(tirus_minimal PRIVATE virusLib)
+
+if(WIN32)
+	target_compile_definitions(tirus_minimal PRIVATE
+		NOMINMAX
+		WIN32_LEAN_AND_MEAN
+	)
+	target_link_libraries(tirus_minimal PRIVATE winmm)
+
+	file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" TIRUSWIND_BUILD_DIR_NATIVE)
+	file(TO_NATIVE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" TIRUSWIND_SOURCE_DIR_NATIVE)
+	file(WRITE "${CMAKE_BINARY_DIR}/Directory.Build.props"
+"<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<Project>
+  <PropertyGroup Condition=\"'$(ProjectName)'=='ALL_BUILD' and '$(MSBuildProjectDirectory)'=='${TIRUSWIND_BUILD_DIR_NATIVE}'\">
+    <LocalDebuggerCommand>$(MSBuildProjectDirectory)\\$(Configuration)\\tirus_minimal.exe</LocalDebuggerCommand>
+    <LocalDebuggerWorkingDirectory>${TIRUSWIND_SOURCE_DIR_NATIVE}</LocalDebuggerWorkingDirectory>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+  </PropertyGroup>
+</Project>
+")
+endif()
 
 if(UNIX AND NOT APPLE)
 	target_link_libraries(tirus_minimal PRIVATE asound)

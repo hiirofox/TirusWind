@@ -6,8 +6,8 @@
 #include "virusLib/microcontroller.h"
 #include "virusLib/romfile.h"
 
-#include "MidiIOHost.h"
-#include "WaveIOI2S.h"
+#include "MidiIO.h"
+#include "WaveIO.h"
 
 #include <algorithm>
 #include <array>
@@ -24,7 +24,7 @@
 
 namespace
 {
-	constexpr uint32_t kSampleRate = 22050;
+	constexpr uint32_t kSampleRate = 44100;
 	constexpr uint32_t kFallbackBlockSize = 256;
 	constexpr uint32_t kWarmupFrames = kSampleRate / 2;
 	constexpr int kDefaultPresetBank = 0;
@@ -71,55 +71,56 @@ namespace
 		return static_cast<uint32_t>(std::clamp(value, 0, 127));
 	}
 
-	bool alsaEventToSynthEvent(const snd_seq_event_t& ev, synthLib::SMidiEvent& out)
+	bool midiEventToSynthEvent(const MidiIO_Universal::Event& ev, synthLib::SMidiEvent& out)
 	{
 		using namespace synthLib;
 
 		out = SMidiEvent(MidiEventSource::Host);
+		const auto type = ev.status & 0xf0;
+		const auto channel = ev.status & 0x0f;
 
-		switch(ev.type)
+		switch(type)
 		{
-		case SND_SEQ_EVENT_NOTE:
-		case SND_SEQ_EVENT_NOTEON:
-			out.a = static_cast<uint8_t>((ev.data.note.velocity == 0 ? M_NOTEOFF : M_NOTEON) | (ev.data.note.channel & 0x0f));
-			out.b = static_cast<uint8_t>(clampMidi7(ev.data.note.note));
-			out.c = static_cast<uint8_t>(clampMidi7(ev.data.note.velocity));
+		case M_NOTEON:
+			out.a = static_cast<uint8_t>((ev.data2 == 0 ? M_NOTEOFF : M_NOTEON) | channel);
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data1));
+			out.c = static_cast<uint8_t>(clampMidi7(ev.data2));
 			return true;
 
-		case SND_SEQ_EVENT_NOTEOFF:
-			out.a = static_cast<uint8_t>(M_NOTEOFF | (ev.data.note.channel & 0x0f));
-			out.b = static_cast<uint8_t>(clampMidi7(ev.data.note.note));
-			out.c = static_cast<uint8_t>(clampMidi7(ev.data.note.velocity));
+		case M_NOTEOFF:
+			out.a = static_cast<uint8_t>(M_NOTEOFF | channel);
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data1));
+			out.c = static_cast<uint8_t>(clampMidi7(ev.data2));
 			return true;
 
-		case SND_SEQ_EVENT_KEYPRESS:
-			out.a = static_cast<uint8_t>(M_POLYPRESSURE | (ev.data.note.channel & 0x0f));
-			out.b = static_cast<uint8_t>(clampMidi7(ev.data.note.note));
-			out.c = static_cast<uint8_t>(clampMidi7(ev.data.note.velocity));
+		case M_POLYPRESSURE:
+			out.a = static_cast<uint8_t>(M_POLYPRESSURE | channel);
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data1));
+			out.c = static_cast<uint8_t>(clampMidi7(ev.data2));
 			return true;
 
-		case SND_SEQ_EVENT_CONTROLLER:
-			out.a = static_cast<uint8_t>(M_CONTROLCHANGE | (ev.data.control.channel & 0x0f));
-			out.b = static_cast<uint8_t>(clampMidi7(ev.data.control.param));
-			out.c = static_cast<uint8_t>(clampMidi7(ev.data.control.value));
+		case M_CONTROLCHANGE:
+			out.a = static_cast<uint8_t>(M_CONTROLCHANGE | channel);
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data1));
+			out.c = static_cast<uint8_t>(clampMidi7(ev.data2));
 			return true;
 
-		case SND_SEQ_EVENT_PGMCHANGE:
-			out.a = static_cast<uint8_t>(M_PROGRAMCHANGE | (ev.data.control.channel & 0x0f));
-			out.b = static_cast<uint8_t>(clampMidi7(ev.data.control.value));
+		case M_PROGRAMCHANGE:
+			out.a = static_cast<uint8_t>(M_PROGRAMCHANGE | channel);
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data1));
 			out.c = 0;
 			return true;
 
-		case SND_SEQ_EVENT_CHANPRESS:
-			out.a = static_cast<uint8_t>(M_AFTERTOUCH | (ev.data.control.channel & 0x0f));
-			out.b = static_cast<uint8_t>(clampMidi7(ev.data.control.value));
+		case M_AFTERTOUCH:
+			out.a = static_cast<uint8_t>(M_AFTERTOUCH | channel);
+			out.b = static_cast<uint8_t>(clampMidi7(ev.data1));
 			out.c = 0;
 			return true;
 
-		case SND_SEQ_EVENT_PITCHBEND:
+		case M_PITCHBEND:
 			{
-				const int bend = std::clamp(ev.data.control.value + 8192, 0, 16383);
-				out.a = static_cast<uint8_t>(M_PITCHBEND | (ev.data.control.channel & 0x0f));
+				const int bend = std::clamp(static_cast<int>(ev.data1) | (static_cast<int>(ev.data2) << 7), 0, 16383);
+				out.a = static_cast<uint8_t>(M_PITCHBEND | channel);
 				out.b = static_cast<uint8_t>(bend & 0x7f);
 				out.c = static_cast<uint8_t>((bend >> 7) & 0x7f);
 				return true;
@@ -218,7 +219,7 @@ int main()
 		params.preferredSamplerate = static_cast<float>(kSampleRate);
 
 		virusLib::Device device(params, false);
-    device.setDspClockPercent(22);//
+		device.setDspClockPercent(40);
 		if(!device.isValid())
 			throw std::runtime_error("Failed to create Virus TI2 device");
 
@@ -252,19 +253,19 @@ int main()
 		while(g_shouldRun.load())
 		{
 			std::vector<synthLib::SMidiEvent> midiIn;
-			snd_seq_event_t alsaEvent{};
+			MidiIO_Universal::Event midiEvent{};
 
-			while(midi.PopEvent(alsaEvent))
+			while(midi.PopEvent(midiEvent))
 			{
 				synthLib::SMidiEvent synthEvent;
-				if(alsaEventToSynthEvent(alsaEvent, synthEvent))
+				if(midiEventToSynthEvent(midiEvent, synthEvent))
 					midiIn.emplace_back(std::move(synthEvent));
 			}
 
 			processBlock(device, inputs, outputs, blockSize, midiIn);
 
 			if(wave.PlayAudio(outputs[0].data(), outputs[1].data(), static_cast<int>(blockSize)) < 0)
-				throw std::runtime_error("ALSA audio playback failed");
+				throw std::runtime_error("Audio playback failed");
 		}
 
 		std::cout << "Stopped.\n";
