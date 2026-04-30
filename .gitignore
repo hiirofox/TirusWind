@@ -51,6 +51,10 @@ cmake-build-*/
 /target/
 /logs/
 
+# TirusWind local build/output directories
+/TirusWind/build/
+/TirusWind/out/
+
 # Imported gearmulator generated directories
 /gearmulator/build/
 /gearmulator/out/

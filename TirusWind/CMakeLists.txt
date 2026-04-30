@@ -11,7 +11,10 @@ set(ASMJIT_TEST FALSE CACHE BOOL "" FORCE)
 set(ASMJIT_NO_INSTALL TRUE CACHE BOOL "" FORCE)
 set(DSP56300_DEBUGGER OFF CACHE BOOL "" FORCE)
 
-set(GEARMULATOR_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/gearmulator/source")
+set(TIRUSWIND_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+get_filename_component(TIRUSWIND_REPO_ROOT "${TIRUSWIND_SOURCE_DIR}/.." ABSOLUTE)
+
+set(GEARMULATOR_SOURCE_DIR "${TIRUSWIND_REPO_ROOT}/gearmulator/source")
 set(DSP56300_SOURCE_DIR "${GEARMULATOR_SOURCE_DIR}/dsp56300/source")
 
 if((UNIX AND NOT APPLE) AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
@@ -34,20 +37,24 @@ endif()
 add_subdirectory("${DSP56300_SOURCE_DIR}/dsp56kBase" "${CMAKE_BINARY_DIR}/gearmulator/dsp56kBase" EXCLUDE_FROM_ALL)
 add_subdirectory("${DSP56300_SOURCE_DIR}/dsp56kEmu" "${CMAKE_BINARY_DIR}/gearmulator/dsp56kEmu" EXCLUDE_FROM_ALL)
 
+if(MSVC)
+	target_compile_options(dsp56kEmu PRIVATE /permissive-)
+endif()
+
 add_subdirectory("${GEARMULATOR_SOURCE_DIR}/baseLib" "${CMAKE_BINARY_DIR}/gearmulator/baseLib" EXCLUDE_FROM_ALL)
 add_subdirectory("${GEARMULATOR_SOURCE_DIR}/libresample" "${CMAKE_BINARY_DIR}/gearmulator/libresample" EXCLUDE_FROM_ALL)
 add_subdirectory("${GEARMULATOR_SOURCE_DIR}/synthLib" "${CMAKE_BINARY_DIR}/gearmulator/synthLib" EXCLUDE_FROM_ALL)
 add_subdirectory("${GEARMULATOR_SOURCE_DIR}/virusLib" "${CMAKE_BINARY_DIR}/gearmulator/virusLib" EXCLUDE_FROM_ALL)
 
-add_executable(tirus_minimal source/main.cpp)
+add_executable(tirus_minimal main.cpp)
 
 set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" PROPERTY VS_STARTUP_PROJECT tirus_minimal)
 
 set_target_properties(tirus_minimal PROPERTIES
-	VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+	VS_DEBUGGER_WORKING_DIRECTORY "${TIRUSWIND_REPO_ROOT}"
 )
 
-file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" TIRUSWIND_PROJECT_ROOT)
+file(TO_CMAKE_PATH "${TIRUSWIND_REPO_ROOT}" TIRUSWIND_PROJECT_ROOT)
 
 target_compile_definitions(tirus_minimal PRIVATE
 	TIRUSWIND_PROJECT_ROOT="${TIRUSWIND_PROJECT_ROOT}"
@@ -63,7 +70,7 @@ if(WIN32)
 	target_link_libraries(tirus_minimal PRIVATE winmm)
 
 	file(TO_NATIVE_PATH "${CMAKE_BINARY_DIR}" TIRUSWIND_BUILD_DIR_NATIVE)
-	file(TO_NATIVE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" TIRUSWIND_SOURCE_DIR_NATIVE)
+	file(TO_NATIVE_PATH "${TIRUSWIND_REPO_ROOT}" TIRUSWIND_SOURCE_DIR_NATIVE)
 	file(WRITE "${CMAKE_BINARY_DIR}/Directory.Build.props"
 "<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <Project>
