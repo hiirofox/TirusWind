@@ -375,7 +375,7 @@ int main()
 		params.preferredSamplerate = static_cast<float>(kSampleRate);
 
 		virusLib::Device device(params, false);
-		device.setDspClockPercent(30);
+		//device.setDspClockPercent(20);
 		if(!device.isValid())
 			throw std::runtime_error("Failed to create Virus TI2 device");
 

@@ -55,6 +55,10 @@ cmake-build-*/
 /TirusWind/build/
 /TirusWind/out/
 
+# dsp56k JIT test local build/output directories
+/dsp56kJitTest/build/
+/dsp56kJitTest/out/
+
 # Imported gearmulator generated directories
 /gearmulator/build/
 /gearmulator/out/
